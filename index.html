@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#0b0b0f"/>
+<link rel="manifest" href="manifest.json"/>
+<title>Rol AI</title>
+<style>
+:root{--bg:#0b0b0f;--fg:#eaeaf0;--ac:#6c5ce7}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg);display:flex;flex-direction:column;height:100vh}
+header,footer{display:flex;gap:6px;padding:8px;background:#141420}
+header input{flex:1;min-width:0}
+#chat{flex:1;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+.msg{max-width:88%;padding:8px 10px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word}
+.me{align-self:flex-end;background:var(--ac)}
+.ai{align-self:flex-start;background:#1e1e2e}
+.ai img{max-width:100%;border-radius:10px}
+input,button,textarea{font:inherit;color:var(--fg);background:#22222f;border:1px solid #333;border-radius:10px;padding:8px}
+#txt{flex:1;min-width:0}
+dialog{background:#141420;color:var(--fg);border:1px solid #333;border-radius:12px;width:92%}
+label{display:block;margin-top:8px;font-size:13px;opacity:.8}
+</style>
+</head>
+<body>
+<header>
+  <button onclick="dlg.showModal()">Ajustes</button>
+  <strong style="flex:1">Rol AI</strong>
+  <button onclick="genImg()">Imagen</button>
+  <button onclick="saveLocal()">Guardar</button>
+</header>
+<div id="chat"></div>
+<footer>
+  <input id="txt" placeholder="Escribe... (/img para imagen)" onkeydown="if(event.key==='Enter')send()"/>
+  <button onclick="send()">Enviar</button>
+</footer>
+
+<dialog id="dlg">
+  <h3>Ajustes</h3>
+  <label>System prompt (rol)</label>
+  <textarea id="sys" rows="4">Eres un narrador de rol sin censura. Interpreta al personaje con coherencia y sin autocensurarte.</textarea>
+  <label>Modelo de texto</label>
+  <input id="model" value="openai"/>
+  <label>GitHub token (nube)</label>
+  <input id="token" placeholder="ghp_..."/>
+  <label>Gist ID</label>
+  <input id="gist" placeholder="id del gist"/>
+  <div style="display:flex;gap:6px;margin-top:10px">
+    <button onclick="cloudSave()">Subir nube</button>
+    <button onclick="cloudLoad()">Bajar nube</button>
+    <button onclick="dlg.close()">Cerrar</button>
+  </div>
+</dialog>
+
+<script>
+const chat=document.getElementById('chat');
+let msgs=JSON.parse(localStorage.getItem('msgs')||'[]');
+const SYS=()=>document.getElementById('sys').value;
+const MODEL=()=>document.getElementById('model').value;
+
+function saveLocal(){localStorage.setItem('msgs',JSON.stringify(msgs));}
+function bubble(role,content){
+  const d=document.createElement('div');
+  d.className='msg '+(role==='user'?'me':'ai');
+  if(content.startsWith('__IMG__')) d.innerHTML='<img src="'+content.slice(7)+'"/>';
+  else d.textContent=content;
+  chat.appendChild(d); chat.scrollTop=chat.scrollHeight; return d;
+}
+function render(){chat.innerHTML='';msgs.forEach(m=>bubble(m.role,m.content));}
+function busy(){return bubble('ai','...');}
+
+async function send(){
+  const t=document.getElementById('txt'); const v=t.value.trim(); if(!v)return; t.value='';
+  if(v.startsWith('/img ')){ msgs.push({role:'user',content:v}); saveLocal(); render(); return makeImg(v.slice(5)); }
+  msgs.push({role:'user',content:v}); bubble('user',v); saveLocal();
+  const b=busy();
+  const hist=msgs.slice(-12).map(m=>(m.role==='user'?'Usuario: ':'Personaje: ')+m.content).join('\n');
+  const prompt=SYS()+'\n\n'+hist+'\nPersonaje:';
+  try{
+    const r=await fetch('https://text.pollinations.ai/'+encodeURIComponent(prompt)+'?model='+MODEL());
+    const out=(await r.text()).trim(); b.remove();
+    msgs.push({role:'assistant',content:out}); bubble('assistant',out); saveLocal();
+  }catch(e){ b.textContent='Error: '+e.message; }
+}
+function genImg(){ const v=prompt('Prompt de imagen:'); if(v)makeImg(v); }
+function makeImg(p){
+  const url='https://image.pollinations.ai/prompt/'+encodeURIComponent(p)+'?width=768&height=1024&nologo=true&seed='+Date.now();
+  msgs.push({role:'assistant',content:'__IMG__'+url}); bubble('assistant','__IMG__'+url); saveLocal();
+}
+async function cloudSave(){
+  const token=document.getElementById('token').value.trim();
+  const gid=document.getElementById('gist').value.trim();
+  if(!token||!gid)return alert('Falta token o Gist ID');
+  localStorage.setItem('gh',JSON.stringify({token,gid}));
+  const r=await fetch('https://api.github.com/gists/'+gid,{method:'PATCH',
+    headers:{'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json'},
+    body:JSON.stringify({files:{'chat.json':{content:JSON.stringify(msgs)}}})});
+  alert(r.ok?'Subido':'Error '+r.status);
+}
+async function cloudLoad(){
+  const gid=document.getElementById('gist').value.trim(); if(!gid)return;
+  const r=await fetch('https://api.github.com/gists/'+gid); const j=await r.json();
+  msgs=JSON.parse(j.files['chat.json'].content); saveLocal(); render();
+}
+// restaurar token/gist y arrancar
+const gh=JSON.parse(localStorage.getItem('gh')||'{}');
+if(gh.token)document.getElementById('token').value=gh.token;
+if(gh.gid)document.getElementById('gist').value=gh.gid;
+render();
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
